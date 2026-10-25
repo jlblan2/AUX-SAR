@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AUX-SAR tests</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; background: #fff; color: #111; padding: 16px; }
+  .pass { color: #0a7a2f; } .fail { color: #b00020; font-weight: bold; }
+  #summary { font-size: 1.2em; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>AUX-SAR tests</h1>
+<p id="summary">Running…</p>
+<ul id="out"></ul>
+<script src="wmm.js"></script>
+<script type="module">
+import { parseCoord, formatDMM, formatMinSec, rhumbDestination, rhumbCourseDistance } from './geo.js';
+import { expandingSquare, sector, parallelOrCreeping, trackline, legHours, CORNERS, cornerName } from './patterns.js';
+import { computeDatum, leewaySpeeds, currentFromFixes } from './drift.js';
+import { LEEWAY_OBJECTS } from './leeway.js';
+import { toCSV, newMission } from './log.js';
+
+const out = document.getElementById('out');
+let pass = 0, fail = 0;
+function check(name, ok, detail) {
+  ok ? pass++ : fail++;
+  const li = document.createElement('li');
+  li.className = ok ? 'pass' : 'fail';
+  li.textContent = `${ok ? 'PASS' : 'FAIL'} — ${name}${detail ? ` (${detail})` : ''}`;
+  out.appendChild(li);
+}
+const near = (a, b, tol = 1e-3) => Math.abs(a - b) <= tol;
+const nearPt = (p, q, tol = 0.01) => near(p[0], q[0], tol) && near(p[1], q[1], tol);
+const courses = (plan) => plan.legs.map((l) => Math.round(l.courseT) % 360);
+const D = { lat: 26.0, lon: -80.0 };
+
+// --- Coordinates ---
+check('parse "26 07.500 N"', near(parseCoord('26 07.500 N', true), 26.125, 1e-9));
+check('parse "080 05.000 W"', near(parseCoord('080 05.000 W', false), -80 - 5 / 60, 1e-9));
+check('parse decimal -80.5', parseCoord('-80.5', false) === -80.5);
+check("parse 26°07.5'N", near(parseCoord("26°07.5'N", true), 26.125, 1e-9));
+check('parse DMS 26 07 30 N', near(parseCoord('26 07 30 N', true), 26.125, 1e-9));
+check('reject lat 91', Number.isNaN(parseCoord('91 N', true)));
+check('reject W on a latitude', Number.isNaN(parseCoord('26 W', true)));
+check('reject minutes ≥ 60', Number.isNaN(parseCoord('26 61 N', true)));
+const [la, lo] = formatDMM(26.125, -80.0833333).split(' ');
+check('formatDMM round trip', near(parseCoord(la, true), 26.125, 1e-5) && near(parseCoord(lo, false), -80.0833333, 1e-5), `${la} ${lo}`);
+
+// --- Rhumb lines ---
+const p60 = rhumbDestination(0, 0, 0, 60);
+check('60 nm north ≈ 1° latitude', near(p60.lat, 0.9993, 0.0005) && near(p60.lon, 0, 1e-9), p60.lat.toFixed(4));
+const back = rhumbCourseDistance(26, -80, rhumbDestination(26, -80, 47, 12.3).lat, rhumbDestination(26, -80, 47, 12.3).lon);
+check('rhumb course/distance inverts destination', near(back.course, 47, 1e-6) && near(back.distNm, 12.3, 1e-6),
+  `${back.course.toFixed(4)} ${back.distNm.toFixed(4)}`);
+
+// --- Timing chart, Coxswain SAR Guide p. 8 (track spacing vs speed, mm:ss) ---
+const chart = {
+  0.1: ['01:00', '00:51', '00:45', '00:40', '00:36', '00:33', '00:30'],
+  0.2: ['02:00', '01:43', '01:30', '01:20', '01:12', '01:05', '01:00'],
+  0.3: ['03:00', '02:34', '02:15', '02:00', '01:48', '01:38', '01:30'],
+  0.4: ['04:00', '03:26', '03:00', '02:40', '02:24', '02:11', '02:00'],
+  0.5: ['05:00', '04:17', '03:45', '03:20', '03:00', '02:44', '02:30'],
+  0.6: ['06:00', '05:09', '04:30', '04:00', '03:36', '03:16', '03:00'],
+  0.7: ['07:00', '06:00', '05:15', '04:40', '04:12', '03:49', '03:30'],
+  0.8: ['08:00', '06:51', '06:00', '05:20', '04:48', '04:22', '04:00'],
+  0.9: ['09:00', '07:43', '06:45', '06:00', '05:24', '04:55', '04:30'],
+  1.0: ['10:00', '08:34', '07:30', '06:40', '06:00', '05:27', '05:00'],
+};
+const bad = [];
+for (const [s, row] of Object.entries(chart)) {
+  row.forEach((want, i) => {
+    const got = formatMinSec(legHours(Number(s), 6 + i));
+    // The printed chart truncates seconds in a few cells; allow 1 s.
+    const secs = (t) => t.split(':').reduce((a, b) => a * 60 + Number(b), 0);
+    if (Math.abs(secs(got) - secs(want)) > 1) bad.push(`${s} nm @ ${6 + i} kn: ${got} vs ${want}`);
+  });
+}
+check('timing chart: all 70 cells within 1 s', bad.length === 0, bad.join('; '));
+
+// --- Expanding square (SS) ---
+const ss = expandingSquare({ datum: D, spacing: 1, firstCourse: 0, legCount: 6 });
+check('SS leg lengths 1,1,2,2,3,3', ss.legs.map((l) => l.distNm).join() === '1,1,2,2,3,3');
+check('SS courses N,E,S,W (90° right turns)', courses(ss).join() === '0,90,180,270,0,90');
+check('SS CSP is datum', ss.csp === D);
+check('SS after 4 legs at (-1,-1) S', nearPt(ss.points[4], [-1, -1]));
+const ss2 = expandingSquare({ datum: D, spacing: 1, firstCourse: 0, legCount: 4, secondSearch: true });
+check('SS second search rotated 45° right', courses(ss2).join() === '45,135,225,315');
+const ssDrift = expandingSquare({ datum: D, spacing: 0.5, firstCourse: 200, legCount: 3 });
+check('SS first leg in direction of drift', courses(ssDrift).join() === '200,290,20');
+
+// --- Sector (VS) ---
+const vs = sector({ datum: D, spacing: 1, firstCourse: 0 });
+check('VS has 9 legs of one S', vs.legs.length === 9 && vs.legs.every((l) => l.distNm === 1));
+check('VS courses (120° right turns)', courses(vs).join() === '0,120,240,240,0,120,120,240,0', courses(vs).join());
+check('VS legs 3, 6, 9 return to datum', [3, 6, 9].every((i) => nearPt(vs.points[i], [0, 0], 1e-9)));
+check('VS second search rotated 30° right', courses(sector({ datum: D, spacing: 1, rotation: 'second' }))[0] === 30);
+check('VM (second SRU) rotated 90° left', courses(sector({ datum: D, spacing: 1, rotation: 'vm' }))[0] === 270);
+check('VS total = 9 × leg time (guide)', near(legHours(vs.totalNm, 10), 9 * legHours(1, 10)));
+
+// --- Parallel (PS) and creeping line (CS) ---
+const ps = parallelOrCreeping({ type: 'PS', center: D, length: 10, width: 6, majorAxis: 0, spacing: 1, corner: [1, -1] });
+check('PS corner [1,-1] with axis 000 is NW', cornerName([1, -1], 0, 10, 6) === 'NW');
+check('PS CSP ½S inside NW corner', nearPt(ps.points[0], [-2.5, 4.5]));
+check('PS 6 tracks of L−S = 9 nm, cross legs S', ps.legs.filter((l) => l.kind === 'search').length === 6 &&
+  ps.legs.filter((l) => l.kind === 'search').every((l) => near(l.distNm, 9)) &&
+  ps.legs.filter((l) => l.kind === 'cross').every((l) => near(l.distNm, 1)));
+check('PS legs parallel to major axis, step east', courses(ps).slice(0, 4).join() === '180,90,0,90');
+check('PS ends ½S inside the far side', nearPt(ps.points.at(-1), [2.5, 4.5]));
+const cs = parallelOrCreeping({ type: 'CS', center: D, length: 10, width: 6, majorAxis: 0, spacing: 1, corner: [1, -1] });
+check('CS legs parallel to minor axis, creeping south', courses(cs).slice(0, 4).join() === '90,180,270,180');
+check('CS 10 tracks of W−S = 5 nm', cs.legs.filter((l) => l.kind === 'search').length === 10 &&
+  cs.legs.filter((l) => l.kind === 'search').every((l) => near(l.distNm, 5)));
+check('CS ends ½S inside the south end', near(cs.points.at(-1)[1], -4.5, 0.01));
+const psRot = parallelOrCreeping({ type: 'PS', center: D, length: 8, width: 4, majorAxis: 45, spacing: 1, corner: CORNERS[2] });
+check('PS rotated area: legs on 045/225', courses(psRot).filter((_, i) => i % 2 === 0).every((c) => c === 45 || c === 225));
+let threw = false;
+try { parallelOrCreeping({ type: 'PS', center: D, length: 0.5, width: 4, spacing: 1 }); } catch (e) { threw = true; }
+check('PS rejects area shorter than S', threw);
+
+// --- Trackline ---
+const dest = rhumbDestination(D.lat, D.lon, 0, 10);
+const tsr = trackline({ origin: D, destination: dest, spacing: 1, returnLeg: true, side: 'right' });
+check('TSR CSP ½S right of origin', nearPt(tsr.points[0], [0.5, 0]));
+check('TSR legs out, cross S, back', courses(tsr).join() === '0,270,180' && near(tsr.legs[1].distNm, 1) && near(tsr.legs[0].distNm, 10, 1e-6));
+check('TSR ends ½S on the other side of origin', nearPt(tsr.points.at(-1), [-0.5, 0]));
+const tsn = trackline({ origin: D, destination: dest, spacing: 1, returnLeg: false });
+check('TSN single leg along track', tsn.legs.length === 1 && courses(tsn)[0] === 0);
+
+// --- TWC from fixes (Set & Drift) ---
+const t0 = Date.UTC(2026, 9, 25, 12);
+const f2 = rhumbDestination(D.lat, D.lon, 90, 1.5);
+const twc = currentFromFixes({ ...D, time: t0 }, { ...f2, time: t0 + 3600000 });
+check('TWC from fixes: 090° 1.5 kn', near(twc.setT, 90, 0.05) && near(twc.driftKn, 1.5, 0.005), `${twc.setT.toFixed(2)} ${twc.driftKn.toFixed(3)}`);
+
+// --- Leeway and datum ---
+const piw = LEEWAY_OBJECTS.find((o) => o.id === 'PIW-1');
+const lw = leewaySpeeds(piw, 20);
+check('PIW leeway at 20 kn: 0.96% downwind', near(lw.dwl, 0.192) && near(lw.cwlR, 0.108) && near(lw.cwlL, -0.108));
+check('leeway is zero with no wind', leewaySpeeds(piw, 0).dwl === 0);
+const raft = LEEWAY_OBJECTS.find((o) => o.id === 'LIFE-RAFT-DB-10');
+check('raft offset converts cm/s to kn', near(leewaySpeeds(raft, 10).dwl, 0.352 - 2.5 * 0.0194384, 1e-6));
+
+const d0 = computeDatum({ lkp: D, lkpTime: t0, datumTime: t0 + 2 * 3600000, twc: { setT: 90, driftKn: 1 }, wind: { fromT: 0, speedKn: 0 }, object: piw });
+const east2 = rhumbCourseDistance(D.lat, D.lon, d0.datum.lat, d0.datum.lon);
+check('datum: current only, 2 h at 1 kn east', near(east2.course, 90, 0.01) && near(east2.distNm, 2, 1e-6) && near(d0.separationNm, 0));
+const d1 = computeDatum({ lkp: D, lkpTime: t0, datumTime: t0 + 3600000, twc: { setT: 0, driftKn: 0 }, wind: { fromT: 0, speedKn: 20 }, object: piw });
+check('datum: wind from N drifts object south', near(d1.driftSetT, 180, 0.01) && near(d1.driftDistNm, 0.192, 1e-6));
+check('datum: left/right separation = 2 × crosswind', near(d1.separationNm, 0.216, 1e-4), d1.separationNm.toFixed(4));
+threw = false;
+try { computeDatum({ lkp: D, lkpTime: t0, datumTime: t0 - 1, twc: {}, wind: {}, object: piw }); } catch (e) { threw = true; }
+check('datum rejects time before LKP', threw);
+
+// --- WMM (from Set & Drift) ---
+const dec = WMM.declination(26.1, -80.1, 0, 2026.8);
+check('WMM variation off Fort Lauderdale is a few degrees W', dec < -4 && dec > -9, dec.toFixed(2));
+
+// --- Log export ---
+const m = newMission();
+m.entries.push({ id: 'a', time: t0, type: 'Sighting', text: 'Orange "raft", maybe', lat: 26.1, lon: -80.1 });
+const csv = toCSV(m);
+check('CSV quotes text with commas and quotes', csv.includes('"Orange ""raft"", maybe"'));
+
+document.getElementById('summary').textContent = `${pass} passed, ${fail} failed`;
+document.getElementById('summary').className = fail ? 'fail' : 'pass';
+window.testResult = { pass, fail };
+</script>
+</body>
+</html>

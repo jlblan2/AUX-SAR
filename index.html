@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a1929">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AUX-SAR">
+<title>AUX-SAR</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>AUX-SAR</h1>
+  <span class="tab-title" id="tabTitle">Datum</span>
+  <button id="settingsBtn" class="icon-btn" aria-label="Settings">&#9881;</button>
+</header>
+
+<main>
+  <!-- ============ DATUM ============ -->
+  <section class="tab" id="tab-datum">
+    <div class="card">
+      <h2>Last known position (LKP)</h2>
+      <div class="pos-row">
+        <label class="field"><span>Latitude</span><input type="text" id="lkpLat" placeholder="26 07.500 N" autocomplete="off"></label>
+        <label class="field"><span>Longitude</span><input type="text" id="lkpLon" placeholder="080 05.000 W" autocomplete="off"></label>
+      </div>
+      <div class="row-btns">
+        <button type="button" class="small-btn" data-gps="lkp">Use my GPS</button>
+      </div>
+      <label class="field"><span>Time of LKP</span><input type="datetime-local" id="lkpTime"></label>
+    </div>
+
+    <div class="card">
+      <h2>Total water current (TWC)</h2>
+      <div class="seg" id="twcModeSeg">
+        <button type="button" class="seg-btn" data-mode="measure">Measure with GPS</button>
+        <button type="button" class="seg-btn" data-mode="enter">Enter</button>
+      </div>
+      <div id="twcMeasure">
+        <p class="hint">Set &amp; Drift method: put a datum marker buoy in the water (fender or life ring with strobe). Press START alongside it, let it drift, come back and press STOP alongside it. Or drift with engines off.</p>
+        <div class="fixes">
+          <div class="fix-card"><h3>Fix 1</h3><p class="coord" id="fix1Coord">&mdash;</p><p class="time" id="fix1Time">&mdash;</p></div>
+          <div class="fix-card"><h3>Fix 2</h3><p class="coord" id="fix2Coord">&mdash;</p><p class="time" id="fix2Time">&mdash;</p></div>
+        </div>
+        <div class="controls">
+          <button id="startBtn" type="button" class="big-btn start">START</button>
+          <button id="stopBtn" type="button" class="big-btn stop" disabled>STOP</button>
+        </div>
+        <p class="status" id="twcStatus">Ready. Press START to mark Fix&nbsp;1.</p>
+        <button id="twcResetBtn" type="button" class="text-btn" hidden>New measurement</button>
+      </div>
+      <div class="pos-row">
+        <label class="field"><span>Set (&deg;T)</span><input type="number" id="twcSet" min="0" max="360" step="1" inputmode="decimal"></label>
+        <label class="field"><span>Drift (kn)</span><input type="number" id="twcDrift" min="0" step="0.1" inputmode="decimal"></label>
+      </div>
+      <p class="meta" id="twcMeta"></p>
+    </div>
+
+    <div class="card">
+      <h2>Wind and search object</h2>
+      <div class="pos-row">
+        <label class="field"><span>Wind from (&deg;T)</span><input type="number" id="windFrom" min="0" max="360" step="1" inputmode="decimal"></label>
+        <label class="field"><span>Wind speed (kn)</span><input type="number" id="windSpeed" min="0" step="1" inputmode="decimal"></label>
+      </div>
+      <label class="field"><span>Search object</span><select id="objectSel"></select></label>
+      <p class="meta" id="leewayMeta"></p>
+    </div>
+
+    <div class="card">
+      <h2>Datum</h2>
+      <label class="field"><span>Datum time</span>
+        <div class="row"><input type="datetime-local" id="datumTime"><button type="button" class="small-btn" id="datumNowBtn">Now</button></div>
+      </label>
+      <button id="datumCalcBtn" type="button" class="big-btn start wide">Compute datum</button>
+      <p class="error" id="datumError" hidden></p>
+      <div id="datumResult" hidden>
+        <div class="result-grid">
+          <div class="result-box wide"><span class="label">Datum</span><span class="value small" id="datumPos"></span></div>
+          <div class="result-box"><span class="label">Direction of drift</span><span class="value" id="driftDir"></span></div>
+          <div class="result-box"><span class="label">Drift rate</span><span class="value" id="driftRate"></span></div>
+        </div>
+        <table class="data">
+          <tbody id="datumTable"></tbody>
+        </table>
+        <div class="row-btns">
+          <button id="useDatumBtn" type="button" class="big-btn start wide">Use for search pattern</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SEARCH ============ -->
+  <section class="tab" id="tab-search" hidden>
+    <div class="card">
+      <label class="field"><span>Search pattern</span>
+        <select id="patternSel">
+          <option value="SS">Expanding Square (SS)</option>
+          <option value="VS">Sector (VS)</option>
+          <option value="PS">Parallel (PS)</option>
+          <option value="CS">Creeping Line (CS)</option>
+          <option value="TSR">Trackline, Return (TSR)</option>
+          <option value="TSN">Trackline, Non-return (TSN)</option>
+        </select>
+      </label>
+      <p class="hint" id="patternHint"></p>
+    </div>
+
+    <div class="card" id="datumCard">
+      <h2 id="datumCardTitle">Datum (CSP)</h2>
+      <div class="pos-row">
+        <label class="field"><span>Latitude</span><input type="text" id="sDatumLat" placeholder="26 07.500 N" autocomplete="off"></label>
+        <label class="field"><span>Longitude</span><input type="text" id="sDatumLon" placeholder="080 05.000 W" autocomplete="off"></label>
+      </div>
+      <div class="row-btns">
+        <button type="button" class="small-btn" data-gps="sDatum">Use my GPS</button>
+      </div>
+    </div>
+
+    <div class="card" id="trackCard" hidden>
+      <h2>Intended track</h2>
+      <p class="sub">Origin</p>
+      <div class="pos-row">
+        <label class="field"><span>Latitude</span><input type="text" id="origLat" autocomplete="off"></label>
+        <label class="field"><span>Longitude</span><input type="text" id="origLon" autocomplete="off"></label>
+      </div>
+      <div class="row-btns"><button type="button" class="small-btn" data-gps="orig">Use my GPS</button></div>
+      <p class="sub">Destination</p>
+      <div class="pos-row">
+        <label class="field"><span>Latitude</span><input type="text" id="destLat" autocomplete="off"></label>
+        <label class="field"><span>Longitude</span><input type="text" id="destLon" autocomplete="off"></label>
+      </div>
+      <label class="field" id="sideField"><span>Run out on which side of the track</span>
+        <select id="sideSel"><option value="right">Right (starboard)</option><option value="left">Left (port)</option></select>
+      </label>
+    </div>
+
+    <div class="card">
+      <h2>Search parameters</h2>
+      <div class="pos-row">
+        <label class="field" id="spacingField"><span id="spacingLabel">Track spacing S (nm)</span><input type="number" id="spacing" min="0.05" step="0.1" inputmode="decimal"></label>
+        <label class="field"><span>Search speed (kn)</span><input type="number" id="speed" min="1" step="1" inputmode="decimal"></label>
+      </div>
+      <details class="guide" id="spacingGuide">
+        <summary>Initial track spacing (first SRU on scene)</summary>
+        <table class="data tap">
+          <thead><tr><th>Search object</th><th>Good<br><small>wind &lt;15 kn, seas &lt;3 ft</small></th><th>Poor<br><small>wind &ge;15 kn or seas &ge;3 ft</small></th></tr></thead>
+          <tbody id="spacingTable"></tbody>
+        </table>
+        <p class="hint">Tap a value to use it. Source: Coxswain SAR Guide.</p>
+      </details>
+
+      <div id="firstLegFields">
+        <label class="field"><span>First leg course (&deg;T) &mdash; direction of drift, 000 if no drift</span>
+          <input type="number" id="firstCourse" min="0" max="360" step="1" inputmode="decimal">
+        </label>
+      </div>
+      <label class="field" id="ssLegsField"><span>Number of legs</span><input type="number" id="ssLegs" min="1" max="60" step="1" inputmode="numeric"></label>
+      <label class="field" id="ssRotField"><span>Search</span>
+        <select id="ssRot"><option value="first">First search</option><option value="second">Second search (rotate 45&deg; right)</option></select>
+      </label>
+      <label class="field" id="vsRotField"><span>Search</span>
+        <select id="vsRot">
+          <option value="first">First search</option>
+          <option value="second">Second search, same SRU (rotate 30&deg; right)</option>
+          <option value="vm">Second SRU, VM (rotate 90&deg; left)</option>
+        </select>
+      </label>
+
+      <div id="areaFields">
+        <div class="pos-row">
+          <label class="field"><span>Length, major axis (nm)</span><input type="number" id="areaLen" min="0.1" step="0.5" inputmode="decimal"></label>
+          <label class="field"><span>Width, minor axis (nm)</span><input type="number" id="areaWid" min="0.1" step="0.5" inputmode="decimal"></label>
+        </div>
+        <div class="pos-row">
+          <label class="field"><span>Major axis (&deg;T)</span><input type="number" id="areaAxis" min="0" max="360" step="1" inputmode="decimal"></label>
+          <label class="field"><span>CSP corner</span><select id="cornerSel"></select></label>
+        </div>
+      </div>
+
+      <button id="planBtn" type="button" class="big-btn start wide">Plan search</button>
+      <p class="error" id="planError" hidden></p>
+    </div>
+
+    <div class="card" id="planResult" hidden>
+      <h2 id="planTitle"></h2>
+      <div class="result-grid">
+        <div class="result-box wide"><span class="label">Commence search point (CSP)</span><span class="value small" id="planCsp"></span></div>
+        <div class="result-box"><span class="label">Total track</span><span class="value" id="planTotal"></span></div>
+        <div class="result-box"><span class="label">Time at speed</span><span class="value" id="planTime"></span></div>
+      </div>
+      <svg id="planSvg" class="plot" viewBox="0 0 300 300" role="img" aria-label="Search pattern plot"></svg>
+      <p class="meta" id="planMeta"></p>
+      <div class="table-wrap">
+        <table class="data legs">
+          <thead><tr><th>Leg</th><th>&deg;T</th><th>&deg;M</th><th>nm</th><th>Time</th><th>Turn point</th></tr></thead>
+          <tbody id="legTable"></tbody>
+        </table>
+      </div>
+      <div class="row-btns">
+        <button id="planLogBtn" type="button" class="small-btn">Add to mission log</button>
+        <button id="planShareBtn" type="button" class="small-btn">Share</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ LOG ============ -->
+  <section class="tab" id="tab-log" hidden>
+    <div class="card">
+      <div class="row">
+        <select id="missionSel" class="grow" aria-label="Mission"></select>
+        <button id="newMissionBtn" type="button" class="small-btn">New</button>
+      </div>
+    </div>
+
+    <details class="card" id="headerCard" open>
+      <summary><h2>Mission &amp; briefing</h2></summary>
+      <div id="headerFields"></div>
+      <h3 class="sub">Briefing</h3>
+      <div id="briefingFields"></div>
+    </details>
+
+    <div class="card">
+      <h2>New entry</h2>
+      <div class="chips" id="entryChips"></div>
+      <textarea id="entryText" rows="3" placeholder="Details (optional)"></textarea>
+      <label class="check"><input type="checkbox" id="entryGps" checked> Record GPS position</label>
+      <button id="addEntryBtn" type="button" class="big-btn start wide">Log entry</button>
+      <p class="status" id="entryStatus"></p>
+    </div>
+
+    <div class="card">
+      <h2>Log</h2>
+      <ul class="entries" id="entryList"></ul>
+      <p class="hint" id="entryEmpty">No entries yet.</p>
+    </div>
+
+    <div class="card">
+      <h2>Export</h2>
+      <div class="row-btns">
+        <button id="shareLogBtn" type="button" class="small-btn">Share / email</button>
+        <button id="csvLogBtn" type="button" class="small-btn">CSV file</button>
+        <button id="printLogBtn" type="button" class="small-btn">Print / PDF</button>
+      </div>
+      <button id="deleteMissionBtn" type="button" class="text-btn danger">Delete this mission</button>
+    </div>
+  </section>
+</main>
+
+<nav class="tabbar" id="tabbar">
+  <button type="button" data-tab="datum" class="active"><span class="ti">&#8982;</span>Datum</button>
+  <button type="button" data-tab="search"><span class="ti">&#9635;</span>Search</button>
+  <button type="button" data-tab="log"><span class="ti">&#9776;</span>Log</button>
+</nav>
+
+<div id="settingsPanel" class="overlay" hidden>
+  <div class="sheet">
+    <h2>Settings</h2>
+    <label class="field">
+      <span>Magnetic variation</span>
+      <div class="seg" id="varModeSeg">
+        <button type="button" class="seg-btn" data-mode="auto">Automatic</button>
+        <button type="button" class="seg-btn" data-mode="manual">Manual</button>
+      </div>
+    </label>
+    <p class="hint" id="varAutoHint">Computed from the position using the WMM2025 world magnetic model (valid 2025&ndash;2030).</p>
+    <label class="field" id="varManualField" hidden>
+      <span>Variation</span>
+      <div class="row">
+        <input type="number" id="varDeg" min="0" max="180" step="0.1" inputmode="decimal">
+        <span>&deg;</span>
+        <select id="varDir"><option value="E">E</option><option value="W">W</option></select>
+      </div>
+    </label>
+    <label class="field">
+      <span>Min. interval for a valid TWC measurement (seconds)</span>
+      <input type="number" id="minInterval" min="1" step="1" inputmode="numeric">
+    </label>
+    <p class="hint">AUX-SAR is a planning aid. Follow the SMC's Search Action Plan; the coxswain is responsible for safe navigation.</p>
+    <div class="sheet-actions">
+      <button id="settingsSave" type="button" class="big-btn start">Save</button>
+      <button id="settingsClose" type="button" class="text-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="printArea" class="print-only"></div>
+
+<script src="wmm.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
