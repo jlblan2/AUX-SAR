@@ -1,6 +1,6 @@
 import {
   formatDMM, parseCoord, formatMinSec, fmtCourse, norm360, variationAt, formatVariation,
-  getFix, vecFromPolar,
+  getFix, vecFromPolar, rhumbCourseDistance,
 } from './geo.js';
 import {
   INITIAL_TRACK_SPACING, CORNERS, cornerName, expandingSquare, sector,
@@ -8,6 +8,7 @@ import {
 } from './patterns.js';
 import { currentFromFixes, leewaySpeeds, divergence, computeDatum } from './drift.js';
 import { LEEWAY_OBJECTS } from './leeway.js';
+import { SearchNavigator, fixFromPosition, sayCourse } from './nav.js';
 import {
   BRIEFING, HEADER, ENTRY_TYPES, loadMissions, saveMissions, newMission, missionTitle,
   entryPosition, entryTime, toText, toCSV, fileName,
@@ -438,8 +439,10 @@ function planSearch() {
       track = [[0, 0], [v.e, v.n]];
     }
     const v = variationAt(plan.csp.lat, plan.csp.lon, Date.now(), settings);
-    lastPlan = { ...plan, speed, spacing, variation: v, pattern: p };
-    renderPlan(lastPlan, area, track);
+    lastPlan = { ...plan, speed, spacing, variation: v, pattern: p, area, trackLine: track, id: `p${Date.now().toString(36)}` };
+    save('auxsar.plan', lastPlan);
+    renderPlan(lastPlan, true);
+    navPlanChanged();
   } catch (err) {
     lastPlan = null;
     $('planResult').hidden = true;
@@ -447,7 +450,7 @@ function planSearch() {
   }
 }
 
-function renderPlan(plan, area, track) {
+function renderPlan(plan, scroll) {
   const v = plan.variation;
   const hours = legHours(plan.totalNm, plan.speed);
   $('planTitle').textContent = `${plan.name}${plan.code.includes('2nd') || plan.code === 'VM' ? ` — ${plan.code}` : ''}`;
@@ -461,13 +464,15 @@ function renderPlan(plan, area, track) {
     `<td>${fmtCourse(l.courseT)}</td><td>${fmtCourse(magnetic(l.courseT, v))}</td>` +
     `<td class="num">${l.distNm.toFixed(2)}</td><td>${formatMinSec(legHours(l.distNm, plan.speed))}</td>` +
     `<td>${formatDMM(l.to.lat, l.to.lon).replace(' ', '<br>')}</td></tr>`).join('');
-  drawPlan(plan, area, track);
+  drawPlan($('planSvg'), plan);
   $('planResult').hidden = false;
-  $('planResult').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (scroll) $('planResult').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function drawPlan(plan, area, track) {
-  const svg = $('planSvg');
+// live (Commence search): { legIndex, trail: [[e, n]...], boat: [e, n] } in plan coordinates.
+function drawPlan(svg, plan, live = null) {
+  const area = plan.area;
+  const track = plan.trackLine;
   const pts = plan.points.slice();
   let areaPts = null;
   if (area) {
@@ -480,6 +485,7 @@ function drawPlan(plan, area, track) {
   }
   if (track) pts.push(...track);
   pts.push([0, 0]);
+  if (live && live.boat) pts.push(live.boat);
   const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
   const span = Math.max(maxX - minX, maxY - minY, 0.01);
@@ -511,6 +517,14 @@ function drawPlan(plan, area, track) {
     out += `<circle cx="${mx}" cy="${my}" r="7" fill="#12253b" stroke="#ff9f1c" stroke-width="1"/>` +
       `<text x="${mx}" y="${my + 3.2}" fill="#eaf2fb" font-size="9" text-anchor="middle">${l.n}</text>`;
   });
+  if (live && live.legIndex != null && plan.legs[live.legIndex]) {
+    const a = plan.points[live.legIndex], b = plan.points[live.legIndex + 1];
+    out += `<line x1="${X(a[0])}" y1="${Y(a[1])}" x2="${X(b[0])}" y2="${Y(b[1])}" stroke="#2ec4b6" stroke-width="5" stroke-linecap="round" opacity="0.8"/>`;
+  }
+  if (live && live.trail && live.trail.length > 1) {
+    const tp = live.trail.map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(' ');
+    out += `<path d="${tp}" fill="none" stroke="#eaf2fb" stroke-width="1.5" stroke-dasharray="2 2"/>`;
+  }
   const csp = plan.points[0];
   out += `<circle cx="${X(csp[0])}" cy="${Y(csp[1])}" r="5" fill="#2ec4b6"/>`;
   out += `<text x="${X(csp[0]) + 7}" y="${Y(csp[1]) + 12}" fill="#2ec4b6" font-size="10" font-weight="700">CSP</text>`;
@@ -519,6 +533,13 @@ function drawPlan(plan, area, track) {
   const scaleNm = niceScale(span / 4);
   out += `<g stroke="#8ea4bf"><line x1="10" y1="290" x2="${10 + scaleNm * k}" y2="290"/><line x1="10" y1="286" x2="10" y2="294"/><line x1="${10 + scaleNm * k}" y1="286" x2="${10 + scaleNm * k}" y2="294"/></g>`;
   out += `<text x="12" y="283" fill="#8ea4bf" font-size="10">${scaleNm} nm</text>`;
+  if (live && live.boat) {
+    const bx = X(live.boat[0]), by = Y(live.boat[1]);
+    const rot = live.headingT != null ? live.headingT : null;
+    out += rot == null
+      ? `<circle cx="${bx}" cy="${by}" r="6" fill="#e63946" stroke="#fff" stroke-width="1.5"/>`
+      : `<path d="M0,-9 L6,7 L0,3 L-6,7 Z" transform="translate(${bx.toFixed(1)},${by.toFixed(1)}) rotate(${rot.toFixed(0)})" fill="#e63946" stroke="#fff" stroke-width="1.2"/>`;
+  }
   svg.innerHTML = out;
 }
 
@@ -556,6 +577,266 @@ $('planShareBtn').addEventListener('click', async () => {
   if (!lastPlan) return;
   const msg = await shareText('AUX-SAR search plan', planSummary(lastPlan));
   if (msg) { $('planShareBtn').textContent = msg; setTimeout(() => { $('planShareBtn').textContent = 'Share'; }, 2000); }
+});
+
+// ---------- commence search (live guidance) ----------
+
+let nav = null; // SearchNavigator for the current or last run
+let navWatch = null;
+let navTimer = null;
+let wakeLock = null;
+let navFlashUntil = 0;
+let navLastLeg = null;
+let voiceOn = load('auxsar.voice', { on: true }).on;
+
+function speak(text, { interrupt = false } = {}) {
+  if (!voiceOn || !('speechSynthesis' in window)) return;
+  const synth = window.speechSynthesis;
+  if (interrupt) synth.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'en-US';
+  u.rate = 1;
+  synth.speak(u);
+}
+
+function showSearchMode(mode) {
+  for (const b of $('searchModeSeg').querySelectorAll('.seg-btn')) b.classList.toggle('active', b.dataset.mode === mode);
+  $('searchPlanView').hidden = mode !== 'plan';
+  $('searchNavView').hidden = mode !== 'nav';
+  if (mode === 'nav') { renderNav(); drawNav(); }
+  window.scrollTo(0, 0);
+}
+
+// Lat/lon to the plan's own east/north nm coordinates (for the plot).
+function planLocal(plan, lat, lon) {
+  const r = rhumbCourseDistance(plan.csp.lat, plan.csp.lon, lat, lon);
+  const v = vecFromPolar(r.course, r.distNm);
+  return [plan.points[0][0] + v.e, plan.points[0][1] + v.n];
+}
+
+function navRunning() { return navWatch != null; }
+
+function navPlan() { return navRunning() ? nav.plan : lastPlan; }
+
+function savedProgress(plan) {
+  const s = load('auxsar.nav', {});
+  return plan && s.planId === plan.id ? s : null;
+}
+
+function saveProgress() {
+  if (nav) save('auxsar.nav', { planId: nav.plan.id, ...nav.snapshot() });
+}
+
+function navPlanChanged() {
+  if (!navRunning()) { renderNav(); drawNav(); }
+}
+
+function fmtDist(nm) {
+  return nm < 0.1 ? `${Math.round(nm * 2025.37)} yd` : `${nm.toFixed(2)} nm`;
+}
+
+function renderNav() {
+  const plan = navPlan();
+  $('navNoPlan').hidden = !!plan;
+  $('navMain').hidden = !plan;
+  if (!plan) return;
+  const running = navRunning();
+  $('navPlanName').textContent = `${plan.name} · ${plan.legs.length} legs${plan.pattern === 'TSN' ? '' : ` · S ${plan.spacing} nm`} · ${plan.speed} kn`;
+  $('navStartBtn').disabled = running;
+  $('navStopBtn').disabled = !running;
+  $('navPrevBtn').disabled = !running;
+  $('navNextBtn').disabled = !running;
+  $('navMuteBtn').textContent = voiceOn ? 'Voice on' : 'Voice off';
+  const prog = running ? null : savedProgress(plan);
+  $('navResumeBtn').hidden = !(prog && prog.phase === 'leg' && prog.leg > 0);
+  if (prog) $('navResumeBtn').textContent = `Resume at leg ${prog.leg + 1}`;
+
+  const now = Date.now();
+  const st = nav && nav.plan === plan ? nav.status(now) : { phase: 'idle' };
+  const mag = (t) => norm360(t - plan.variation.value);
+  let status;
+  let label;
+  let distLabel = 'To turn';
+  if (st.phase === 'toCSP') {
+    status = st.fix ? 'Steering for the CSP' : 'Waiting for GPS…';
+    label = 'Steer for CSP';
+    distLabel = 'To CSP';
+  } else if (st.phase === 'leg') {
+    status = `Leg ${st.leg + 1} of ${st.legs}`;
+    label = 'Steer';
+    if (st.leg === st.legs - 1) distLabel = 'To end';
+  } else if (st.phase === 'done') {
+    status = 'Search pattern complete';
+    label = 'Last leg';
+  } else {
+    status = 'Press START. Keep this screen open during the search.';
+    label = 'Leg 1';
+  }
+  const steer = st.steerM != null ? st.steerM : mag(plan.legs[st.phase === 'done' ? plan.legs.length - 1 : 0].courseT);
+  $('navStatus').textContent = status;
+  $('navSteerLabel').textContent = label;
+  $('navSteer').textContent = `${fmtCourse(steer)}°M`;
+  $('navDistLabel').textContent = distLabel;
+  $('navDist').textContent = st.distNm != null ? fmtDist(st.distNm) : '—';
+  $('navEta').textContent = st.etaS != null ? formatMinSec(st.etaS / 3600) : '—';
+  $('navNext').textContent = st.phase === 'leg' || st.phase === 'toCSP'
+    ? (st.nextM != null ? `${fmtCourse(st.nextM)}°M` : 'end') : '—';
+  if (st.xteNm != null) {
+    const yd = Math.round(Math.abs(st.xteNm) * 2025.37);
+    $('navXte').textContent = yd === 0 ? '0 yd' : `${yd} yd ${st.xteNm > 0 ? 'R' : 'L'}`;
+  } else {
+    $('navXte').textContent = '—';
+  }
+  $('navSog').textContent = st.speedKn != null ? `${st.speedKn.toFixed(1)} kn` : '—';
+  $('navCog').textContent = st.cogM != null ? `${fmtCourse(st.cogM)}°M` : '—';
+
+  if (st.phase === 'leg' && navLastLeg != null && st.leg !== navLastLeg) navFlashUntil = now + 2500;
+  navLastLeg = st.phase === 'leg' ? st.leg : null;
+  const cd = $('navCountdown');
+  if (st.countdown && st.etaS != null) {
+    cd.hidden = false;
+    cd.textContent = `${st.nextM != null ? `Turn to ${fmtCourse(st.nextM)}°M` : 'End'} in ${Math.max(1, Math.ceil(st.etaS - 0.05))}`;
+  } else if (now < navFlashUntil) {
+    cd.hidden = false;
+    cd.textContent = 'TURN NOW';
+  } else {
+    cd.hidden = true;
+  }
+}
+
+function drawNav() {
+  const plan = navPlan();
+  if (!plan || $('searchNavView').hidden) return;
+  const live = { legIndex: null, trail: [], boat: null, headingT: null };
+  if (nav && nav.plan === plan) {
+    if (nav.phase === 'leg') live.legIndex = nav.leg;
+    live.trail = nav.track.map((p) => planLocal(plan, p.lat, p.lon));
+    if (nav.fix && navRunning()) {
+      live.boat = planLocal(plan, nav.fix.lat, nav.fix.lon);
+      if (Number.isFinite(nav.fix.headingT) && nav.speedKn >= 0.3) live.headingT = nav.fix.headingT;
+    }
+  }
+  drawPlan($('navSvg'), plan, live);
+}
+
+async function requestWake() {
+  try {
+    if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+  } catch (e) { /* not supported or refused; the on-screen hint asks to keep the screen on */ }
+}
+
+function releaseWake() {
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && navRunning()) requestWake();
+});
+
+function afterNavStep(before) {
+  const after = nav.snapshot();
+  const changed = before.phase !== after.phase || before.leg !== after.leg;
+  if (changed) saveProgress();
+  if (nav.phase === 'done') finishNav();
+  return changed;
+}
+
+function onNavFix(pos) {
+  if (!nav) return;
+  const fix = fixFromPosition(pos);
+  const before = nav.snapshot();
+  nav.update(fix);
+  afterNavStep(before);
+  $('navGps').textContent = `GPS ±${Math.round(fix.accuracy || 0)} m at ${clockTime(fix.time)}`;
+  renderNav();
+  drawNav();
+}
+
+function onNavError(err) {
+  $('navGps').textContent = gpsError(err);
+}
+
+function navTick() {
+  if (!nav) return;
+  const before = nav.snapshot();
+  nav.tick(Date.now());
+  if (afterNavStep(before)) drawNav();
+  renderNav();
+}
+
+function startNav(resumeLeg = null) {
+  if (!lastPlan) return;
+  if (!('geolocation' in navigator)) { alert('Location is not available on this device/browser.'); return; }
+  nav = new SearchNavigator(lastPlan, { speak, log: (type, text, fix) => addEntry(type, text, fix) });
+  navLastLeg = null;
+  nav.start(resumeLeg); // the first speech must come from the tap, or iPhone stays silent
+  saveProgress();
+  navWatch = navigator.geolocation.watchPosition(onNavFix, onNavError, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+  navTimer = setInterval(navTick, 200);
+  requestWake();
+  $('navGps').textContent = 'Waiting for GPS…';
+  renderNav();
+  drawNav();
+}
+
+function stopWatching() {
+  if (navWatch != null) navigator.geolocation.clearWatch(navWatch);
+  navWatch = null;
+  clearInterval(navTimer);
+  navTimer = null;
+  releaseWake();
+}
+
+// Pattern finished: stop GPS but keep the final picture on screen.
+function finishNav() {
+  if (!navRunning()) return;
+  stopWatching();
+  save('auxsar.nav', {});
+}
+
+function stopNav() {
+  if (!nav) return;
+  saveProgress();
+  stopWatching();
+  nav.stop();
+  speak('Search guidance stopped.', { interrupt: true });
+  renderNav();
+  drawNav();
+}
+
+$('searchModeSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('.seg-btn');
+  if (b) showSearchMode(b.dataset.mode);
+});
+$('planCommenceBtn').addEventListener('click', () => showSearchMode('nav'));
+$('navStartBtn').addEventListener('click', () => startNav());
+$('navResumeBtn').addEventListener('click', () => {
+  const prog = savedProgress(lastPlan);
+  startNav(prog ? prog.leg : null);
+});
+$('navStopBtn').addEventListener('click', stopNav);
+for (const [id, delta] of [['navPrevBtn', -1], ['navNextBtn', 1]]) {
+  $(id).addEventListener('click', () => {
+    if (!nav) return;
+    nav.skip(delta);
+    saveProgress();
+    renderNav();
+    drawNav();
+  });
+}
+$('navMuteBtn').addEventListener('click', () => {
+  voiceOn = !voiceOn;
+  save('auxsar.voice', { on: voiceOn });
+  if (!voiceOn && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+  renderNav();
+});
+$('navTestBtn').addEventListener('click', () => {
+  const plan = navPlan();
+  const c = plan ? norm360(plan.legs[0].courseT - plan.variation.value) : 0;
+  const was = voiceOn;
+  voiceOn = true;
+  speak(`Voice check. Leg one, course ${sayCourse(c)} magnetic. Five, four, three, two, one. Turn now.`, { interrupt: true });
+  voiceOn = was;
 });
 
 // ---------- mission log ----------
@@ -771,6 +1052,11 @@ for (const id of ['twcSet', 'twcDrift', 'lkpLat', 'lkpLon']) $(id).addEventListe
 for (const id of ['windSpeed', 'windFrom', 'objectSel']) {
   $(id).addEventListener('input', updateLeewayMeta);
   $(id).addEventListener('change', updateLeewayMeta);
+}
+const savedPlan = load('auxsar.plan', {});
+if (Array.isArray(savedPlan.legs) && savedPlan.legs.length) {
+  lastPlan = savedPlan;
+  renderPlan(lastPlan, false);
 }
 renderTwc();
 updateLeewayMeta();

@@ -21,6 +21,8 @@ import { expandingSquare, sector, parallelOrCreeping, trackline, legHours, CORNE
 import { computeDatum, leewaySpeeds, currentFromFixes } from './drift.js';
 import { LEEWAY_OBJECTS } from './leeway.js';
 import { toCSV, newMission } from './log.js';
+import { SearchNavigator, sayCourse, arrivalRadiusNm } from './nav.js';
+import { norm360 } from './geo.js';
 
 const out = document.getElementById('out');
 let pass = 0, fail = 0;
@@ -155,6 +157,85 @@ check('datum rejects time before LKP', threw);
 // --- WMM (from Set & Drift) ---
 const dec = WMM.declination(26.1, -80.1, 0, 2026.8);
 check('WMM variation off Fort Lauderdale is a few degrees W', dec < -4 && dec > -9, dec.toFixed(2));
+
+// --- Commence search: simulated boat at 10 kn, GPS once a second ---
+{
+  const plan = {
+    ...expandingSquare({ datum: D, spacing: 0.2, firstCourse: 0, legCount: 6 }),
+    spacing: 0.2, speed: 10, variation: { value: -7 },
+  };
+  const start = rhumbDestination(D.lat, D.lon, 180, 0.3); // 0.3 nm south of the CSP
+  const wps = [start, plan.csp, ...plan.legs.map((l) => l.to)];
+  const segs = [];
+  let cum = 0;
+  for (let i = 1; i < wps.length; i++) {
+    const cd = rhumbCourseDistance(wps[i - 1].lat, wps[i - 1].lon, wps[i].lat, wps[i].lon);
+    segs.push({ from: wps[i - 1], course: cd.course, len: cd.distNm, at: cum });
+    cum += cd.distNm;
+  }
+  const posAt = (nm) => {
+    const s = segs.find((g) => nm <= g.at + g.len) || segs[segs.length - 1];
+    return rhumbDestination(s.from.lat, s.from.lon, s.course, Math.min(nm - s.at, s.len));
+  };
+  const said = [];
+  const logged = [];
+  const t0 = 1e12;
+  let now = t0;
+  const navr = new SearchNavigator(plan, {
+    speak: (text) => said.push({ t: (now - t0) / 1000, text }),
+    log: (type) => logged.push(type),
+  });
+  navr.start();
+  const SPEED = 10;
+  for (let ms = 0; ms <= (cum / SPEED) * 3600000 + 20000; ms += 100) {
+    now = t0 + ms;
+    if (ms % 1000 === 0) {
+      const p = posAt(Math.min(cum, (SPEED * ms) / 3600000));
+      navr.update({ lat: p.lat, lon: p.lon, time: now, speedKn: SPEED, headingT: 0 });
+    }
+    navr.tick(now);
+    if (navr.phase === 'done') break;
+  }
+  const texts = said.map((s) => s.text);
+  check('nav: guidance start is spoken', texts[0] === 'Search guidance started.');
+  check('nav: steer for CSP in magnetic (000°T + 7° W = 007)', texts[1] === 'Steer zero zero seven magnetic for the CSP, 0.3 miles.', texts[1]);
+  check('nav: CSP reached with leg one magnetic course',
+    texts.includes('CSP reached. Commence search. Leg one, course zero zero seven magnetic.'));
+  // Each turn i (end of leg i+1) should be called on time.
+  const turnTime = (i) => ((0.3 + plan.legs.slice(0, i + 1).reduce((a, l) => a + l.distNm, 0)) / SPEED) * 3600;
+  const problems = [];
+  for (let i = 0; i < plan.legs.length - 1; i++) {
+    const T = turnTime(i);
+    const next = plan.legs[i + 1];
+    const course = sayCourse(norm360(next.courseT + 7));
+    const ann = said.find((s) => s.text === `Next, leg ${i + 2}, course ${course} magnetic.`);
+    if (!ann || Math.abs(ann.t - (T - 11)) > 1.2) problems.push(`leg ${i + 2} announce at ${ann && ann.t.toFixed(1)} want ${(T - 11).toFixed(1)}`);
+    for (const [n, w] of [[5, 'five'], [4, 'four'], [3, 'three'], [2, 'two'], [1, 'one']]) {
+      const c = said.find((s) => s.text === w && s.t > T - 7 && s.t < T + 1);
+      if (!c || Math.abs(c.t - (T - n)) > 0.7) problems.push(`turn ${i + 1} "${w}" at ${c && c.t.toFixed(1)} want ${(T - n).toFixed(1)}`);
+    }
+    const tn = said.find((s) => s.text === 'Turn now.' && Math.abs(s.t - T) < 3);
+    if (!tn || Math.abs(tn.t - T) > 0.7) problems.push(`turn ${i + 1} "Turn now" at ${tn && tn.t.toFixed(1)} want ${T.toFixed(1)}`);
+  }
+  check('nav: each turn — next course ~11 s ahead, 5-4-3-2-1 one second apart, "Turn now" on time', problems.length === 0, problems.slice(0, 4).join('; '));
+  check('nav: five "Turn now" calls for six legs', texts.filter((t) => t === 'Turn now.').length === 5);
+  check('nav: no true courses spoken (leg 2 is 090°T = 097°M)', !texts.some((t) => t.includes('zero nine zero')) && texts.some((t) => t.includes('zero nine seven')));
+  check('nav: ends with "Search pattern complete."', texts.at(-1) === 'Search pattern complete.' && navr.phase === 'done');
+  check('nav: CSP and completion logged', logged.join() === 'Commence search,Search complete');
+}
+check('nav: courses read digit by digit', sayCourse(5) === 'zero zero five' && sayCourse(359.6) === 'zero zero zero');
+check('nav: arrival radius is S/4 within 30–90 m', near(arrivalRadiusNm(0.1), 0.025) && arrivalRadiusNm(0.01) === 0.016 && arrivalRadiusNm(2) === 0.05);
+{
+  // Overshooting a turn between GPS fixes still turns straight away.
+  const plan = { ...expandingSquare({ datum: D, spacing: 0.2, legCount: 3 }), spacing: 0.2, speed: 10, variation: { value: 0 } };
+  const said = [];
+  const n2 = new SearchNavigator(plan, { speak: (t) => said.push(t) });
+  n2.start();
+  n2.update({ ...D, time: 0, speedKn: 0 });
+  const past = rhumbDestination(D.lat, D.lon, 0, 0.25);
+  n2.update({ ...past, time: 1000, speedKn: 0 });
+  check('nav: passing the turn point without a countdown turns at once', n2.leg === 1 && said.includes('Turn now.'), said.join(' | '));
+}
 
 // --- Log export ---
 const m = newMission();

@@ -97,6 +97,54 @@
 
   <!-- ============ SEARCH ============ -->
   <section class="tab" id="tab-search" hidden>
+    <div class="seg" id="searchModeSeg">
+      <button type="button" class="seg-btn active" data-mode="plan">Plan</button>
+      <button type="button" class="seg-btn" data-mode="nav">Commence search</button>
+    </div>
+
+    <div id="searchNavView" hidden>
+      <div class="card" id="navNoPlan">
+        <h2>No search planned</h2>
+        <p class="hint">Plan a search pattern first, then come back here to run it.</p>
+      </div>
+      <div id="navMain" hidden>
+        <div class="card nav-card">
+          <p class="nav-plan" id="navPlanName"></p>
+          <p class="nav-status" id="navStatus">Press START. Keep this screen open during the search.</p>
+          <div class="nav-steer">
+            <span class="label" id="navSteerLabel">Steer</span>
+            <span class="value" id="navSteer">---</span>
+          </div>
+          <div class="nav-countdown" id="navCountdown" hidden></div>
+          <div class="result-grid">
+            <div class="result-box"><span class="label" id="navDistLabel">To turn</span><span class="value" id="navDist">&mdash;</span></div>
+            <div class="result-box"><span class="label">Time</span><span class="value" id="navEta">&mdash;</span></div>
+            <div class="result-box"><span class="label">Next leg</span><span class="value" id="navNext">&mdash;</span></div>
+            <div class="result-box"><span class="label">Off track</span><span class="value" id="navXte">&mdash;</span></div>
+            <div class="result-box"><span class="label">Speed</span><span class="value" id="navSog">&mdash;</span></div>
+            <div class="result-box"><span class="label">Course made good</span><span class="value" id="navCog">&mdash;</span></div>
+          </div>
+        </div>
+        <svg id="navSvg" class="plot" viewBox="0 0 300 300" role="img" aria-label="Boat position on the search pattern"></svg>
+        <div class="card">
+          <div class="controls">
+            <button id="navStartBtn" type="button" class="big-btn start">START</button>
+            <button id="navStopBtn" type="button" class="big-btn stop" disabled>STOP</button>
+          </div>
+          <button id="navResumeBtn" type="button" class="small-btn wide-btn" hidden></button>
+          <div class="row-btns nav-row">
+            <button id="navPrevBtn" type="button" class="small-btn" disabled>&#9664; Leg back</button>
+            <button id="navNextBtn" type="button" class="small-btn" disabled>Leg ahead &#9654;</button>
+            <button id="navMuteBtn" type="button" class="small-btn">Voice on</button>
+            <button id="navTestBtn" type="button" class="small-btn">Test voice</button>
+          </div>
+          <p class="meta" id="navGps"></p>
+          <p class="hint">All courses are magnetic. The voice calls the CSP, the next leg's course about 10 seconds before each turn, a five-second countdown, and "Turn now". On iPhone keep AUX-SAR open with the screen on (it stays awake while guiding), turn the volume up, and make sure the side switch isn't on silent.</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="searchPlanView">
     <div class="card">
       <label class="field"><span>Search pattern</span>
         <select id="patternSel">
@@ -206,6 +254,8 @@
         <button id="planLogBtn" type="button" class="small-btn">Add to mission log</button>
         <button id="planShareBtn" type="button" class="small-btn">Share</button>
       </div>
+      <button id="planCommenceBtn" type="button" class="big-btn start wide">Commence search &#9654;</button>
+    </div>
     </div>
   </section>
 

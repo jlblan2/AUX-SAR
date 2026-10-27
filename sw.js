@@ -1,4 +1,4 @@
-const CACHE = 'auxsar-v1';
+const CACHE = 'auxsar-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -10,6 +10,7 @@ const ASSETS = [
   './drift.js',
   './leeway.js',
   './log.js',
+  './nav.js',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
