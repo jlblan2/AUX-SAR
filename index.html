@@ -332,6 +332,7 @@
       <input type="number" id="minInterval" min="1" step="1" inputmode="numeric">
     </label>
     <p class="hint">AUX-SAR is a planning aid. Follow the SMC's Search Action Plan; the coxswain is responsible for safe navigation.</p>
+    <button type="button" class="text-btn" onclick="showDisclaimer()">Disclaimer</button>
     <div class="sheet-actions">
       <button id="settingsSave" type="button" class="big-btn start">Save</button>
       <button id="settingsClose" type="button" class="text-btn">Cancel</button>
@@ -341,6 +342,7 @@
 
 <div id="printArea" class="print-only"></div>
 
+<script src="disclaimer.js" data-app="AUX-SAR"></script>
 <script src="wmm.js"></script>
 <script type="module" src="app.js"></script>
 </body>

@@ -68,5 +68,16 @@ phones pick up the new version.
 
 ## Disclaimer
 
-A planning aid only. Follow the SMC's Search Action Plan; the coxswain is responsible
+The app shows this on first use and must be accepted before it can be used (it can be read again from Settings):
+
+> This software is provided "as is", without warranty of any kind, express or implied,
+> including any warranty of accuracy, reliability or fitness for a particular purpose.
+> N. Tesla, Inc. and the developer assume no responsibility or liability to the user of
+> this application, or to anyone else, for its use, or for any loss, damage, injury or
+> death arising from its use, from the information it provides, or from being unable to
+> use it. The user is responsible for using due diligence: checking all information
+> against official sources, charts, forecasts and equipment, and using sound judgment.
+> The user assumes all risk of using this application.
+
+AUX-SAR is a planning aid only. Follow the SMC's Search Action Plan; the coxswain is responsible
 for the safety of the crew and the safe navigation of the boat.
